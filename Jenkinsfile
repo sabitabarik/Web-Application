@@ -44,7 +44,7 @@ pipeline {
 
         stage('GetCode') {
             steps {
-                git branch: 'masin', url: 'https://github.com/manoj7894/swiggy-nodejs-devops-project.git'
+                git branch: 'main', url: 'https://github.com/manoj7894/swiggy-nodejs-devops-project.git'
             }
         }
 
