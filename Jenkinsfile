@@ -12,36 +12,6 @@ pipeline {
     }
 
     stages {
-        stage('Cleanup Old Docker Images') {
-            steps {
-                script {
-                    echo "Cleaning up old Docker images..."
-                    
-                    // Get the list of old images matching the pattern
-                    def oldImages = sh(script: "docker images --format '{{.Repository}}:{{.Tag}}' | grep '${OLD_IMAGE_TAG_PATTERN}'", returnStdout: true).trim()
-                    
-                    if (oldImages) {
-                        oldImages.split('\n').each { image ->
-                            if (image != DOCKER_IMAGE) {
-                                echo "Attempting to remove old image ${image}"
-                                sh """
-                                    # Check if the image exists before trying to delete it
-                                    if docker images -q ${image} > /dev/null 2>&1; then
-                                        # Try to remove the image
-                                        docker rmi -f ${image} || echo 'Failed to remove image ${image} - might be in use or other error.'
-                                    else
-                                        echo 'Image ${image} does not exist.'
-                                    fi
-                                """
-                            }
-                        }
-                    } else {
-                        echo "No old images found matching pattern ${OLD_IMAGE_TAG_PATTERN}"
-                    }
-                }
-            }
-        }
-
         stage('GetCode') {
             steps {
                 git branch: 'main', url: 'https://github.com/manoj7894/swiggy-nodejs-devops-project.git'
