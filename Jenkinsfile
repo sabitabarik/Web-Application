@@ -6,9 +6,9 @@ pipeline {
         DOCKERHUB_CREDENTIALS = credentials('Docker_id')
         DOCKER_IMAGE = "manoj3003/pipelie-cicd:${BUILD_NUMBER}"
         OLD_IMAGE_TAG_PATTERN = "manoj3003/pipelie-cicd:*"  // Pattern to match old images
-        GIT_REPO_NAME = "tomat123"
+        GIT_REPO_NAME = "swiggy-nodejs-devops-project"
         GIT_USER_NAME = "manoj7894"
-        DEPLOYMENT_FILE_PATH = "Kubernets/deployment.yml"  // Adjust the path if necessary
+        DEPLOYMENT_FILE_PATH = "Kubernetes/deployment.yml"  // Adjust the path if necessary
     }
 
     stages {
@@ -82,7 +82,7 @@ pipeline {
                         '''
 
                         // Check out the repository
-                        sh 'git checkout master'
+                        sh 'git checkout main'
 
                         // Display the current content of the deployment file for debugging
                         sh 'cat ${DEPLOYMENT_FILE_PATH}'
@@ -100,7 +100,7 @@ pipeline {
                             else
                                 git add ${DEPLOYMENT_FILE_PATH}
                                 git commit -m "Update deployment image to version ${BUILD_NUMBER}"
-                                git push -f https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git HEAD:master
+                                git push -f https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git HEAD:main
                             fi
                         '''
                     }
