@@ -1,14 +1,18 @@
 pipeline {
     agent any
-
+    
+    tools {
+        nodejs 'node22'
+    }
 
     environment {
         DOCKERHUB_CREDENTIALS = credentials('Docker_id')
-        DOCKER_IMAGE = "manoj3003/pipelie-cicd:${BUILD_NUMBER}"
-        OLD_IMAGE_TAG_PATTERN = "manoj3003/pipelie-cicd:*"  // Pattern to match old images
+        DOCKER_IMAGE = "manoj3003/database:${BUILD_NUMBER}"
+        OLD_IMAGE_TAG_PATTERN = "manoj3003/database:*"  // Pattern to match old images
         GIT_REPO_NAME = "swiggy-nodejs-devops-project"
         GIT_USER_NAME = "manoj7894"
         DEPLOYMENT_FILE_PATH = "Kubernetes/deployment.yml"  // Adjust the path if necessary
+        SCANNER_HOME = tool 'sonar-scanner'
     }
 
     stages {
@@ -17,7 +21,6 @@ pipeline {
                 script {
                     echo "Cleaning up old Docker images..."
                     
-                    // Get the list of old images matching the pattern
                     def oldImages = sh(script: "docker images --format '{{.Repository}}:{{.Tag}}' | grep '${OLD_IMAGE_TAG_PATTERN}'", returnStdout: true).trim()
                     
                     if (oldImages) {
@@ -25,9 +28,7 @@ pipeline {
                             if (image != DOCKER_IMAGE) {
                                 echo "Attempting to remove old image ${image}"
                                 sh """
-                                    # Check if the image exists before trying to delete it
                                     if docker images -q ${image} > /dev/null 2>&1; then
-                                        # Try to remove the image
                                         docker rmi -f ${image} || echo 'Failed to remove image ${image} - might be in use or other error.'
                                     else
                                         echo 'Image ${image} does not exist.'
@@ -41,23 +42,101 @@ pipeline {
                 }
             }
         }
+        stage('Cleanup Old Trivy Reports') {
+            steps {
+                script {
+                    echo "Cleaning up old Trivy reports..."
+                    sh '''
+                        rm -f trivy.txt
+                        rm -f fs-report.html
+                    '''
+                }
+            }
+        }
         
         stage('GetCode') {
             steps {
                 git branch: 'main', url: 'https://github.com/manoj7894/swiggy-nodejs-devops-project.git'
             }
         }
-
-        stage('Build') {
+        
+        stage('Install Package Dependencies') {
             steps {
-                sh "docker build -t ${DOCKER_IMAGE} ."
+                sh "npm install"
             }
         }
-
-        stage('Login') {
+        
+        stage('Check for Tests') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'Docker_id', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
-                    sh 'echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin'
+                script {
+                    def testScriptExists = sh(script: "grep -q '\"test\":' package.json", returnStatus: true) == 0
+                    env.TEST_SCRIPT_EXISTS = testScriptExists ? 'true' : 'false'
+                }
+            }
+        }
+        
+        /*
+        stage('unit test') {
+            when {
+                expression { env.TEST_SCRIPT_EXISTS == 'true' }
+            }
+            steps {
+                script {
+                    try {
+                        sh "npm test"
+                        currentBuild.result = 'SUCCESS'
+                    } catch (Exception e) {
+                        echo "Unit tests failed. Continuing with the pipeline."
+                        currentBuild.result = 'UNSTABLE'
+                    }
+                }
+            }
+        } */
+        
+        stage('OWASP SCAN') {
+            when {
+                expression {
+                    // Check if pom.xml exists
+                    return fileExists('pom.xml')
+                }
+            }
+            steps {
+                dependencyCheck additionalArguments: '', odcInstallation: 'DP-Check'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+        
+        stage("Trivy filesystem scan") {
+            steps {
+                script {
+                    sh "trivy fs --format table -o fs-report.html ."
+                }
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'Docker_id', toolName: 'Docker') {
+                        sh "docker build -t ${DOCKER_IMAGE} ."
+                    }
+                }
+            }
+        }
+        
+        stage("Trivy image scan") {
+            steps {
+                script {
+                    sh "trivy image ${DOCKER_IMAGE} > trivy.txt"
+                }
+            }
+        }
+        
+        stage("SonarQube") {
+            steps {
+                withSonarQubeEnv('Sonar_Install') {
+                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Campground \
+                    -Dsonar.projectKey=Campground '''
                 }
             }
         }
@@ -65,8 +144,9 @@ pipeline {
         stage('Push') {
             steps {
                 script {
-                    def dockerImage = docker.image(DOCKER_IMAGE)
-                    dockerImage.push() // Pushes the Docker image to the repository
+                    withDockerRegistry(credentialsId: 'Docker_id', toolName: 'Docker') {
+                        sh "docker push ${DOCKER_IMAGE}"
+                    }
                 }
             }
         }
@@ -75,25 +155,18 @@ pipeline {
             steps {
                 withCredentials([string(credentialsId: 'github_id', variable: 'GITHUB_TOKEN')]) {
                     script {
-                        // Configure Git
                         sh '''
                             git config user.email "manojvarmapotthuri3003@gmail.com"
                             git config user.name "Manojvarma Potthuri"
                         '''
 
-                        // Check out the repository
                         sh 'git checkout main'
-
-                        // Display the current content of the deployment file for debugging
                         sh 'cat ${DEPLOYMENT_FILE_PATH}'
 
-                        // Update the image tag in deployment.yml
                         sh '''
-                            # Use sed to replace the image tag dynamically
-                            sed -i "s|image: manoj3003/pipelie-cicd:[^[:space:]]*|image: manoj3003/pipelie-cicd:${BUILD_NUMBER}|g" ${DEPLOYMENT_FILE_PATH}
+                            sed -i "s|image: manoj3003/database:[^[:space:]]*|image: manoj3003/database:${BUILD_NUMBER}|g" ${DEPLOYMENT_FILE_PATH}
                         '''
 
-                        // Check for changes and commit if necessary
                         sh '''
                             if git diff --quiet; then
                                 echo "No changes detected in ${DEPLOYMENT_FILE_PATH}"
@@ -107,11 +180,32 @@ pipeline {
                 }
             }
         }
+        
+        stage('K8S-Deploy') {
+            steps {
+                withKubeConfig(caCertificate: '', clusterName: ' eks-1', contextName: '', credentialsId: 'k8-token', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://05FF96831A57B61D6882E866196EB072.sk1.ap-south-1.eks.amazonaws.com') {
+                sh "kubectl apply -f Kubernetes/deployment.yml"
+                sh "kubectl apply -f Kubernetes/service.yml"
+                sleep 20
+                }
+            }
+        }
+        
+         stage('Verify the Deployment') {
+            steps {
+                withKubeConfig(caCertificate: '', clusterName: ' eks-1', contextName: '', credentialsId: 'k8-token', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://05FF96831A57B61D6882E866196EB072.sk1.ap-south-1.eks.amazonaws.com') {
+                sh "kubectl get pods"
+                sh "kubectl get svc"
+                }
+            }
+        }
     }
+    
+    
 
     post {
         always {
-            emailext (
+            emailext attachLog: true,
                 subject: "Pipeline Status: ${BUILD_NUMBER}",
                 body: '''<html>
                            <body>
@@ -120,11 +214,11 @@ pipeline {
                               <p>Check the <a href="${BUILD_URL}">console output</a>.</p>
                            </body>
                         </html>''',
-                to: 'varmapotthuri4@gmail.com',
+                to: 'manojvarmapotthutri@gmail.com',
                 from: 'jenkins@example.com',
                 replyTo: 'jenkins@example.com',
+                attachmentsPattern: 'trivy.txt',
                 mimeType: 'text/html'
-            )
         }
     }
 }
