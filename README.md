@@ -47,3 +47,5 @@ Push Docker Image:
 Push the built image to Docker Hub (or any container registry).
 Deploy Application:
 Use Kubernetes manifests to deploy the application to the EKS cluster.
+Monitor the application and cluster:
+Setup the Prometheus and Grafana to EKS cluser for monitor the application and cluster
